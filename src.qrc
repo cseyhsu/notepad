@@ -1,0 +1,11 @@
+<RCC>
+    <qresource prefix="/">
+        <file>img/logo.png</file>
+        <file>img/note.png</file>
+        <file>img/close.png</file>
+        <file>img/new.png</file>
+        <file>img/open.png</file>
+        <file>img/save.png</file>
+        <file>img/notePad.ico</file>
+    </qresource>
+</RCC>

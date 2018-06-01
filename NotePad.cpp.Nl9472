@@ -1,0 +1,1089 @@
+﻿#include "NotePad.h"
+#include<QFileDialog>
+#include<QFileInfo>
+#include<QList>
+
+#include<QInputDialog>
+#include<QAction>
+#include<QMenuBar>
+#include<QFontDialog>
+#include<QMenu>
+#include<QStatusBar>
+#include<QLabel>
+#include<QKeySequence>
+#include<QTabWidget>
+#include<QPlainTextEdit>
+#include<QHBoxLayout>
+#include<QToolBar>
+#include<QIcon>
+#include<QList>
+#include<QMimeData>
+#include<QUrl>
+#include<QFile>
+#include<QFileInfo>
+#include<QTextStream>
+#include<array>
+#include<QDebug>
+#include<QDesktopServices>
+#include<QMessageBox>
+#include"AboutNotePad.h"
+#include<QSize>
+#include<QTextCursor>
+#include<QMenuBar>
+#include"Finddlg.h"
+using std:: make_shared;
+using std:: shared_ptr;
+
+
+
+//=============================================================================
+// 初始化
+NotePad::NotePad(QWidget *parent)
+    : QMainWindow(parent)
+{
+    setWindowTitle("notePad --");
+    setAcceptDrops (true);
+    font.setFamily ("宋体");
+    font.setPointSize (12);
+    autoLine = true;                                                    //设置为自动换行
+    mThread.moveToThread (&mThread);
+    mThread.start ();
+    qDebug()<<" main tid "<<QThread::currentThreadId ();
+
+    // connect(mText.get (),SIGNAL(textChanged()),&mThread,SLOT(countString()));
+    //    connect(mText.get (),SIGNAL(cursorPositionChanged()),&mThread,SLOT(onTextCursorChange()));
+    connect(&mThread,SIGNAL(cursorIn(int,int)),this,SLOT(onCursorChange(int,int)));
+    connect(&mThread,SIGNAL(wordCount(int)),this,SLOT(onWordChange(int)));
+}
+
+//====================================================================================
+//== 获取一个 tabWidget
+QTabWidget *NotePad::getTab()
+{
+    return tabWidget;
+}
+
+void NotePad::setText(std::shared_ptr<QPlainTextEdit> text)
+{
+    qDebug()<<" void NotePad::setText(std::shared_ptr<QPlainTextEdit> text)";
+    mText = text;
+}
+
+std::shared_ptr<QPlainTextEdit> NotePad::getText()
+{
+    qDebug()<<"std::shared_ptr<QPlainTextEdit> NotePad::getText()";
+    return mText;
+
+}
+
+NotePad::~NotePad()
+{
+
+}
+
+
+// 获取一个新的实例
+NotePad *NotePad::getNewInstance()
+{
+    NotePad * notePad = new NotePad();
+
+    if(  notePad)
+    {
+
+        notePad->initialNotePad ();
+        notePad->setConnect ();
+
+    }
+    else
+    {
+        notePad = nullptr;
+    }
+
+    return notePad;
+}
+
+
+//========================================================
+// 重写的 dropEvent
+void  NotePad::dropEvent(QDropEvent *event)
+{
+    if(event->mimeData ()->hasUrls ())
+    {
+        auto list =  event->mimeData()->urls ();
+        QString path = list[0].toLocalFile ();
+        QFileInfo fo(path);
+        if(fo.isDir ())
+        {
+            QMessageBox::critical (this,"这是一个文件夹","在这里不能打开一个文件夹",
+                                   QMessageBox::Ok);
+            return ;
+        }
+
+        QFile file(path);
+        if(file.open(QIODevice::Text| QIODevice::ReadOnly))
+        {
+            QTextStream ou(&file);
+            QFileInfo info(file);
+            // auto widget = tabWidget->currentWidget ();
+            // auto w = static_cast<Content*>(widget);
+            auto newWid = new Content(this);
+            tabWidget->addTab (newWid,info.baseName ());
+            setWindowTitle (info.baseName ());
+            auto num =    tabWidget->count ();
+            tabWidget->setCurrentIndex (num -1);
+            mThread.setText (newWid->getEdit ());
+            newWid->getEdit ()->setPlainText (ou.readAll ());
+            file.close ();
+            filePath.append (path);
+            for( int i = 0 ; i< filePath.count ();++i)
+            {
+                qDebug()<< " file Path "<< filePath[i];
+            }
+        }
+    }
+}
+
+
+//======================================================================
+// 重写的dragEnterEvent
+void  NotePad::dragEnterEvent(QDragEnterEvent *event)
+{
+    if(event->mimeData () ->hasUrls ())
+    {
+        event->accept ();
+    }
+}
+
+void NotePad::closeEvent(QCloseEvent *event)
+{
+    if(tabWidget->count () == 0)
+    {
+        qDebug()<<" 我只有个一个文件的tab了";
+        event->accept ();
+    }
+    auto ret =  QMessageBox::critical (this,"关闭窗口","shifou",QMessageBox::Ok,QMessageBox::Cancel);
+    if(ret == QMessageBox::Ok)
+    {
+        event->accept ();
+    }
+    else
+    {
+        event->ignore ();
+    }
+}
+
+// ==================================================
+// 打开about 对话框
+void NotePad::onAbout()
+{
+    qDebug()<<" call on about";
+    AboutNotePad  *about = new AboutNotePad;
+    about->setAttribute (Qt::WA_DeleteOnClose);
+    about->show ();
+}
+
+//=============================================================
+// 打开 help 的链接
+void NotePad::onHelp()
+{
+    QDesktopServices::openUrl (QUrl("http://qt.io"));
+}
+
+
+//===========================================================================
+//= 当前的文本的光标移动的事件
+void NotePad::onCursorChange(int col, int ln)
+{
+    QString str="第 "+ QString::number (col)+"  行 , 第  "+QString::number (ln)+" 列";
+    mshowColLn ->setText (str);
+}
+
+//============================================================================
+// 当前的文本的字数发生变化的事件
+void NotePad::onWordChange(int wd)
+{
+    mShowWord->setText ("word : "+QString::number(wd));
+}
+
+//===========================================================================
+// 弹出 查找对话框
+void NotePad::onFindClick()
+{
+    Finddlg * find = new Finddlg;
+    find ->setAttribute (Qt::WA_DeleteOnClose);
+    find->show ();
+
+    connect(find,SIGNAL(findBack(QString,Qt::CaseSensitivity)),this,SLOT(onFindBackText(QString,Qt::CaseSensitivity)));
+    connect(find, SIGNAL(findFor(QString,Qt::CaseSensitivity)),this,SLOT(onFindForText(QString,Qt::CaseSensitivity)));
+}
+
+
+//==============================================================================
+// ==弹出查找下一个的对话框
+void NotePad::onFindNextClick()
+{
+    qDebug()<<"void NotePad::onFindNextClick()";
+}
+
+
+//=============================================================================
+//==替换对话框
+void NotePad::onReplaceClick()
+{
+    qDebug()<<"void NotePad::onReplaceClick()";
+}
+
+//=========================================================================
+// 转到某一行的对话框
+void NotePad::onGotoClick()
+{
+    qDebug()<<"void NotePad::onGotoClick()";
+    bool ok;
+    auto box =  QInputDialog::getInt (this,"转到","行数",1,1,mThread.getMaxLine (),1,&ok,Qt::WindowCloseButtonHint|Qt::Drawer);
+    qDebug()<<"get : "<<box;
+
+    if(ok)
+    {
+        qDebug()<<mText.get ();
+
+
+        auto cursor = mText->textCursor ();
+        QString str = mText->toPlainText ();
+        int index = 0;
+        int next = -1 ;
+
+        for( int i = 0 ; i< box; ++i)
+        {
+            index = next+1;
+            next = str.indexOf ('\n',index);
+        }
+
+        qDebug()<<" index  =   "<<index;
+        cursor.setPosition (index);
+        mText->setTextCursor (cursor);
+
+    }
+}
+
+// ============================================================================
+//==全选的对话框
+void NotePad::onSelectClick()
+{
+    qDebug()<<"void NotePad::onSelectClick()";
+    mText->selectAll ();
+}
+
+
+// =======================================================
+//  向前查找
+void NotePad::onFindForText(QString str, Qt::CaseSensitivity cs)
+{
+    qDebug()<<"void NotePad::onFindForText(QString str, Qt::CaseSensitivity cs) ";
+    qDebug()<<" find text is "<<str;
+
+    QString text =mText->toPlainText ();
+    auto pos = text.count ();
+    auto ps =  text.indexOf (str,0,cs);
+    auto cus = mText->textCursor ();
+    cus.setPosition (ps);
+    mText->setTextCursor (cus);
+
+}
+
+
+//=================================================================
+//  向后查找
+void NotePad::onFindBackText(QString str, Qt::CaseSensitivity cs)
+{
+    qDebug()<<"void NotePad::onFindBackText(QString str, Qt::CaseSensitivity cs)";
+    qDebug()<<" find Text is "<< str;
+}
+
+// ===========================================================================
+// 自动换行的对话框
+void NotePad::onAutoLineClick()
+{
+    qDebug()<<"void NotePad::onAutoLineClick()";
+    auto action= findMenuAction ("自动换行");
+    if(action)
+    {
+        // qDebug()<<"设置 是否自动换行"<<action<<"  and checked is "<<action->Checked ();
+        auto check= action->isChecked ();
+        qDebug()<<"是否是可以 checkAble : "<<action->isCheckable ()<<"当前是否是可以： "<<check;
+        action->setCheckable (true);
+        action->setChecked (~check);
+        qDebug()<<"是否是可以 checkAble : "<<action->isCheckable ()<<"当前是否是可以： "<<!check;
+
+        autoLine = !check;
+        if(autoLine){
+            qDebug()<<__LINE__<<"自动换行";
+
+            mText->setLineWrapMode( QPlainTextEdit::WidgetWidth);
+
+        } else
+        {
+            qDebug()<<__LINE__<<"不自动换行";
+
+            mText->setLineWrapMode( QPlainTextEdit::NoWrap);
+
+        }
+    }
+}
+
+
+//===========================================================================
+// 自动换行的对话框
+void NotePad::onFontClick()
+{
+    qDebug()<<"void NotePad::onFontClick()";
+    QFontDialog  dlg(this);
+    if(dlg.exec () == QFontDialog::Accepted)
+    {
+        font = dlg.selectedFont ();
+        mText->setFont (font);
+    }
+
+
+}
+
+//============================================================================
+//= 状态栏的对话框
+void NotePad::onStatusClick()
+{
+    qDebug()<<"void NotePad:onStatusClick()";
+}
+
+
+
+//=============================================================================
+// 是否是显示toolBar的对话框
+void NotePad::onTooBarClick()
+{
+    qDebug()<<" void NotePad::onToolBarClick()";
+}
+
+
+// ==============================================================================
+// 设置剪切这个action 是否可用
+void NotePad::setCutAvailable()
+{
+    qDebug()<<"void NotePad::setCutAvailable()";
+    if(mText)
+    {
+        if(mText->toPlainText ().count ()  == 0 )
+        {
+            auto action =     findMenuAction ("剪切");
+            if(action)
+            {
+                action->setEnabled (false);
+            }
+        }
+    }
+}
+
+
+// ===============================================================
+//=====
+void NotePad::setFindEnable(bool en)
+{
+    auto action = findMenuAction ("查找");
+    if(action)
+    {
+        action ->setEnabled (!mText->toPlainText ().isEmpty ());
+    }
+}
+
+void NotePad::setCopyEnable(bool en)
+{
+
+}
+
+void NotePad::setSelectEnable(bool en)
+{
+
+}
+
+void NotePad::setReplaceEnable(bool en)
+{
+
+}
+
+void NotePad::setDeleteEnable(bool en)
+{
+
+}
+
+void NotePad::setFindNextEnable(bool en)
+{
+
+}
+
+void NotePad::setActionEnable(QString actionName)
+{
+    auto action = findMenuAction (actionName);                      //查找action
+    if(action)
+    {
+        action->setEnabled (!mText->toPlainText ().isEmpty ());
+    }
+}
+
+void NotePad::onTabChange(int index)
+{
+    auto item =static_cast<Content*>( tabWidget->widget (index));
+    setText(item->getEdit ());
+    mThread.setText (item->getEdit ());
+    onWordChange (item->getEdit ()->toPlainText ().count ());
+    onCursorChange (0,0);
+    mText->setFont (font);
+    connect(mText.get (),SIGNAL(textChanged()),this,SLOT(setCutAvailable()));
+}
+
+
+//==========================================================================
+// 新建文件
+void NotePad::onNewClick()
+{
+    qDebug()<<" 新建一个文件";
+    auto  newItem = new Content(this);          //新建一个tab
+    setWindowTitle ("新建 *");                    //给新建的tab 起名字
+    tabWidget ->addTab (newItem,"新建");          //将新建的tab 添加到 tabWidget 中去
+    setText (newItem->getEdit ());                  //重新设置当前的 mText(智能指针)
+    mText->setFont (font);                          //重新设置字体
+    initialEditAction ();                           //重新初始化编辑的状态
+    auto coun = tabWidget->count();                 //计算tabWidget 中的weidget 数量
+    tabWidget->setCurrentIndex (coun-1);            //将当前的tabWidget 设置为当前新添加的一个
+    // 将当前的 文本内容和 编辑框中的状态链接在一起
+    connect(newItem->getEdit ().get (),SIGNAL(textChanged()),this,SLOT(initialEditAction()));
+}
+
+
+// ========================================================================
+//=== 关闭一个 widget
+void NotePad::onTabCloseRe(int index)
+{
+    qDebug()<<" onTabClodeRe";
+    auto cou = tabWidget->count ();         //获取当前的tab的数量
+    if(cou == 1)
+    {
+        close();
+    }
+
+    tabWidget->removeTab (index);
+}
+
+
+//================================================================
+//打开一个新的文件
+void NotePad::onFileOpenClick()
+{
+    qDebug()<<"void NotePad::onFileOpenClick() ";
+
+    mText->setFont (font);
+}
+
+
+//==================================================================
+//== 保存一个文件
+void NotePad::onSaveClick()
+{
+    qDebug()<<"void NotePad::onSaveClick()";
+
+    QFileDialog flg (this);
+    flg.setAcceptMode (QFileDialog::AcceptSave);
+    flg.setWindowTitle ("保存文件");
+
+    if(flg.exec () == QFileDialog::Accepted)
+    {
+        qDebug()<<" accepted ";
+    }
+}
+
+
+// ========================================================
+//== 保存一个文件
+void NotePad::onFileSaveClick()
+{
+    qDebug()<<"void NotePad::onFileSaveClick()";
+    QFileDialog flg (this);
+    flg.setAcceptMode (QFileDialog::AcceptSave);
+    flg.setWindowTitle ("保存文件");
+
+    if(flg.exec () == QFileDialog::Accepted)
+    {
+        qDebug()<<" accepted ";
+    }
+}
+
+
+//===============================================================
+// 将文件另存为
+void NotePad::onFileSaveAsClick()
+{
+    qDebug()<<" onFileSaveAsCLick";
+}
+
+
+//=========================================================================
+//== 关闭文件
+void NotePad::onCloseClick()
+{
+    qDebug()<<" onCloseClick";
+    auto index = tabWidget->currentIndex ();
+    tabWidget->removeTab (index);
+}
+
+
+//====================================================================
+//撤销操作
+void NotePad::onUndoClick()
+{
+    qDebug()<<"void NotePad::onUndoClick()";
+    if(mText)
+    {
+        qDebug()<<" mText 'cout "<<mText.use_count ();
+        mText->undo ();
+    }
+}
+
+
+
+//======================================================================
+// 剪切操作
+void NotePad::onCutClick()
+{
+    qDebug()<<"void NotePad::onCutClick()";
+    mText->cut ();;
+}
+
+
+// ===============================================================
+// 复制操作
+void NotePad::onCopyClick()
+{
+    qDebug()<<"void NotePad::onCopyClick()";
+    mText->copy ();
+}
+
+
+
+//================================================================
+//粘贴操作
+void NotePad::onPasteClick()
+{
+    qDebug()<<"void NotePad::onPasteClick()";
+    mText->paste ();
+}
+
+
+//==================================================================
+//删除操作
+void NotePad::onDeleteClick()
+{
+    qDebug()<<"void NotePad::onDeleteClick()";
+    mText->deleteLater ();
+}
+
+
+//========================================================================
+//初始化
+bool NotePad::initialNotePad()
+{
+    bool ret = true;
+    mshowColLn = new QLabel (this);
+    mShowWord = new QLabel(this);
+    mShowWord->setText ("这里是状态栏");
+    mshowColLn ->setText ("行 :  列 : ");
+    auto menuB = new QMenuBar(this);
+    qDebug()<<__LINE__<<menuB;
+    setMenuBar (menuB);
+    initialTabWidget();
+    initialMenuFile ();
+    initialMenuEdit ();
+    initialMenuFormat();
+    initialMenuView ();
+    initialMenuHelp ();
+    initialToolBar ();
+
+    initialStatusBar ();
+
+    qDebug()<<" menu  = "<<menuBar ();
+
+    return ret;
+
+}
+
+// ========================================================
+// 初始化tabWidget
+bool NotePad::initialTabWidget()
+{
+    bool ret = true;
+    tabWidget = new QTabWidget(this);
+    connect(tabWidget,SIGNAL(currentChanged(int)),this,SLOT(onTabChange(int)));
+    connect(tabWidget,SIGNAL(tabCloseRequested(int)),this,SLOT(onTabCloseRe(int)));
+
+    //  tabWidget ->addTab (new QWidget(this),"firsta");
+    tabWidget->setTabPosition (QTabWidget::North);
+    tabWidget->setTabsClosable (true);
+    //    auto wid = new QWidget(this);
+    //   tabWidget->addTab (wid,"second");
+    auto me = new Content(this);
+    me->getEdit () ->setPlainText ("世界你好么我好了了哦佛山的肌肤");
+    tabWidget ->addTab (me,"自定义");
+
+    // tabWidget->addTab (new QMainWindow(this),"mainWIndow");
+
+    setCentralWidget (tabWidget);
+    return ret;
+}
+
+
+//================================================================
+//链接信号到槽
+void NotePad::setConnect()
+{
+
+}
+
+//================================================================================
+// 初始化文件的菜单
+bool NotePad::initialMenuFile()
+{
+    bool ret = true;
+
+    auto  mb = menuBar ();
+    QMenu *menu = new QMenu("文件(&F)",mb);    //
+    qDebug()<<__LINE__<<" initail file Menu "<<menu;
+    mb->addMenu (menu);
+
+
+    const std:: array<QString,5>text={
+        "新建",
+        "打开",
+        "保存",
+        "另存为",
+        "退出",
+    };
+
+    const std:: array<int, 5>key={
+        Qt::CTRL+Qt::Key_N,
+        Qt::CTRL+Qt::Key_O,
+        Qt::CTRL+Qt::Key_S,
+        Qt::CTRL+Qt::Key_M,
+        0,
+
+
+    };
+
+
+    std:: array<QAction * ,5>action={
+        nullptr,
+    };
+    qDebug()<<" action size = "<<action.size();
+    for(unsigned int i = 0; i< action.size(); ++i)
+    {
+        makeMenuAction(action[i],text[i],key[i],menu);
+        if(action[i] != nullptr)
+        {
+            menu->addAction(action[i]);
+        }
+        else
+        {
+            ret  = false;
+
+        }
+    }
+
+    connect(action[0],SIGNAL(triggered(bool)),this,SLOT(onNewClick()));     //新建文件
+    connect(action[1],SIGNAL(triggered(bool)),this,SLOT(onFileOpenClick())); // 打开文件
+    connect(action[2],SIGNAL(triggered(bool)),this,SLOT(onFileSaveClick())); // 保存文件
+    connect(action[3],SIGNAL(triggered(bool)),this,SLOT(onFileSaveAsClick())); // 另存为
+    connect(action[4],SIGNAL(triggered(bool)),this,SLOT(close()));   //关闭
+    return ret;
+
+}
+
+//===================================================================================
+// 初始化状态栏的菜单
+bool NotePad::initialStatusBar()
+{
+    bool ret = true;
+    auto sb = statusBar ();
+    //  sb->addPermanentWidget (new QLabel("这里是状态栏",this));
+    sb->addPermanentWidget (mShowWord);
+    sb->addWidget (mshowColLn);
+
+
+    return ret;
+
+}
+
+// =====================================================================================
+//= 初始化编辑菜单
+bool NotePad::initialMenuEdit()
+{
+    bool ret = true;
+    auto mb = menuBar ();
+    auto menu = new QMenu("编辑(E)",mb);
+    mb->addMenu (menu);
+    qDebug()<<__LINE__<<" initail edit Menu "<<menu;
+
+    const std:: array<QString ,10>text={
+        "撤销(U)",
+        "剪切(T)",
+        "复制(C)",
+        "粘贴(P)",
+        "删除(L)",
+        "查找(F)",
+        "查找下一个(N)",
+        "替换(R)",
+        "转到(G)",
+        "全选(A)",
+
+    };
+
+    const std:: array<int, 10>key={
+        Qt::CTRL+Qt::Key_Z,
+        Qt::CTRL+Qt::Key_X,
+        Qt::CTRL+Qt::Key_C,
+        Qt::CTRL+Qt::Key_V,
+        Qt::Key_Delete,
+        Qt::CTRL+Qt::Key_F,
+        Qt::Key_F3,
+
+        Qt::CTRL+Qt::Key_H,
+
+        Qt::CTRL+Qt::Key_G,
+        Qt::CTRL+Qt::Key_A,
+
+
+
+    };
+
+    std:: array<QAction * ,10>action={
+        nullptr,
+    };
+
+    for(unsigned int i = 0; i< action.size(); ++i)
+    {
+        makeMenuAction(action[i],text[i],key[i],menu);
+        if(action[i] )
+        {
+            menu->addAction(action[i]);
+        }
+        else
+        {
+            ret  = false;
+            return ret;
+
+        }
+
+        // qDebug()<<" action "<<action[i];
+
+
+    }
+
+    connect(action[0],SIGNAL(triggered(bool)),this,SLOT(onUndoClick()));                //撤销cao'z操作
+    connect(action[1],SIGNAL(triggered(bool)),this,SLOT(onCutClick()));                     // 剪切操作
+    connect(action[2],SIGNAL(triggered(bool)),this,SLOT(onCopyClick())) ;              //复制操作
+    connect(action[3],SIGNAL(triggered(bool)),this,SLOT(onPasteClick()));         //粘贴操作
+    connect(action[4],SIGNAL(triggered(bool)),this,SLOT(onDeleteClick()));          //删除操作
+    connect(action[5],SIGNAL(triggered(bool)),this,SLOT(onFindClick()));                    //弹出一个查找对话框
+    connect(action[6],SIGNAL(triggered(bool)),this,SLOT(onFindNextClick()));    //查找下一个的操作
+    connect(action[7],SIGNAL(triggered(bool)),this,SLOT(onReplaceClick()));     //替换的操作
+    connect(action[8],SIGNAL(triggered(bool)),this,SLOT(onGotoClick())) ;       //转到某一行的操作
+    connect(action[9],SIGNAL(triggered(bool)),this,SLOT(onSelectClick()));  //全选的操作
+    return ret;
+}
+
+//  ====================================================================================
+//初始化g格式  菜单
+bool NotePad::initialMenuFormat()
+{
+    bool ret = true;
+    auto mb = menuBar ();
+    auto menu = new QMenu("格式(O)",mb);
+    mb->addMenu (menu);
+
+    qDebug()<<__LINE__<<" initail format Menu "<<menu;
+
+
+    const std::array<QString ,2 > text=
+    {
+        "自动换行",
+        "字体",
+    };
+    std:: array<int  , 2> key={
+        0,
+    };
+
+    std::array<QAction * , 2> action={
+        nullptr,
+    };
+
+    for( unsigned int i = 0 ; i< action.size(); ++i)
+    {
+        makeMenuAction(action[i],text[i],key[i],menu);
+        if(action[i] )
+        {
+            menu->addAction(action[i]);
+        }
+        else
+        {
+            ret  = false;
+            return ret;
+
+        }
+
+
+    }
+    action[0]->setCheckable(true);
+    // action[0]->setChecked(autoLine);
+    qDebug()<<__LINE__<<action[0]<<" action is checkable "<<action[0]->isCheckable()<<"  isChecked : "<<action[0]->isChecked();
+
+    connect(action[0],SIGNAL(triggered(bool)),this,SLOT(onAutoLineClick()));   // 自动换行
+    connect(action[1],SIGNAL(triggered(bool)),this,SLOT(onFontClick()));        // 选择字体
+    return ret;
+}
+
+
+//=======================================================================================
+// 初始化查看菜单
+bool NotePad::initialMenuView()
+{
+    bool ret = true;
+    auto mb = menuBar ();
+    auto menu = new QMenu("查看(V)",mb);
+    mb->addMenu (menu);
+    qDebug()<<__LINE__<<" initail view Menu "<<menu;
+
+    const std::array<QString ,2 > text=
+    {
+        "状态栏(S)",
+        "工具栏(T)",
+    };
+    std:: array<int  , 2> key={
+        0,
+    };
+
+    std::array<QAction * , 2> action={
+        nullptr,
+    };
+
+    for( unsigned int i = 0 ; i< action.size(); ++i)
+    {
+        makeMenuAction(action[i],text[i],key[i],menu);
+        if(action[i] )
+        {
+            menu->addAction(action[i]);
+            action[i]->setCheckable(true);
+        }
+        else
+        {
+            ret  = false;
+            return ret;
+
+        }
+
+
+    }
+
+    connect(action[0],SIGNAL(triggered(bool)),this,SLOT(onStatusClick()));   //状态栏
+    connect(action[1],SIGNAL(triggered(bool)),this,SLOT(onTooBarClick())) ; // 工具栏的是否可见
+    return ret;
+}
+
+//=======================================================================================
+// 初始化帮助菜单
+bool NotePad::initialMenuHelp()
+{
+    bool ret = true;
+    auto mb = menuBar ();
+    auto menu = new QMenu("帮助(H)",mb);
+    mb->addMenu (menu);
+    qDebug()<<__LINE__<<" initail help Menu "<<menu;
+
+    const std::array<QString ,2 > text=
+    {
+        "查看帮助(H)",
+        "关于notePad--(A)",
+    };
+    std:: array<int  , 2> key={
+        0,
+    };
+
+    std::array<QAction * , 2> action={
+        nullptr,
+    };
+
+    for( unsigned int i = 0 ; i< action.size(); ++i)
+    {
+        makeMenuAction(action[i],text[i],key[i],menu);
+        if(action[i] )
+        {
+            menu->addAction(action[i]);
+        }
+        else
+        {
+            ret  = false;
+            return ret;
+
+        }
+
+
+    }
+    connect(action[0],SIGNAL(triggered(bool)),this,SLOT(onHelp()));   //帮助
+    connect(action[1],SIGNAL(triggered(bool)),this,SLOT(onAbout())); //关于
+    return ret;
+}
+
+
+// ==================================================
+// 初始化toolBar
+bool NotePad::initialToolBar()
+{
+    bool ret = true;
+
+    auto toob = new  QToolBar("toolBar",this);
+    toob->setMovable (true);
+    toob->setFloatable (true);
+    toob->setIconSize (QSize(20,20));
+    addToolBar (toob);
+
+    const std:: array<QString,4>tips={
+        "新建",
+        "打开",
+        "保存",
+        "关闭",
+    };
+
+    const std::array<QString,4> icon={
+        ":img/new.png",
+        ":img/open.png",
+        ":img/save.png",
+        ":img/close.png",
+    };
+
+    std::array<QAction* ,4> action={
+        nullptr,
+    };
+
+    for( unsigned int i = 0 ; i< action.size (); ++i)
+    {
+        makeToolBarAction (action[i],tips[i],icon[i]);
+        if(action[i])
+        {
+            toob->addAction(action[i]);
+        } else
+        {
+            ret = false;
+            return ret;
+        }
+    }
+
+
+    connect(action[0],SIGNAL(triggered(bool)),this,SLOT(onNewClick()));  // 新建文件
+    connect(action[1],SIGNAL(triggered(bool)),this,SLOT(onFileOpenClick())); // 打开文件
+    connect(action[2],SIGNAL(triggered(bool)),this,SLOT(onFileSaveClick()));  // 保存文件
+    connect(action[3],SIGNAL(triggered(bool)),this,SLOT(onCloseClick())); // 关闭当前的tab
+
+
+    return ret;
+}
+
+
+// ===========================================================================
+//= 初始化 菜单的action
+bool NotePad::makeMenuAction(QAction *&action, QString text, int key,QMenu * parent)
+{
+    bool ret = true;
+    action = new QAction (text,parent);
+    if( action )
+    {
+        action ->setShortcut (key);
+    } else
+    {
+        ret = false;
+    }
+    return ret;
+}
+
+
+//============================================================================
+// 初始化工具栏的action
+void NotePad::makeToolBarAction(QAction *&action, QString tips,const  QString icon)
+{
+    action = new QAction(this);
+    if(action)
+    {
+        action ->setToolTip (tips);
+
+        action->setIcon (QIcon(icon));
+    }
+}
+
+
+//===========================================================================================
+//初始化编辑的action是否可用
+void NotePad::initialEditAction()
+{
+    const std:: array<QString ,9>text={
+        "撤销(U)",
+        "剪切(T)",
+        "复制(C)",
+
+        "删除(L)",
+        "查找(F)",
+        "查找下一个(N)",
+        "替换(R)",
+        "转到(G)",
+        "全选(A)",
+
+    };
+
+    for ( unsigned int i = 0 ; i< text .size (); ++i)
+    {
+        setActionEnable (text[i]);
+    }
+
+}
+
+QAction *NotePad::findMenuAction(QString str)
+{
+    QAction * ret = nullptr;
+    //    qDebug()<<"QAction *NotePad::findMenuAction(QString str)";
+    auto ch = QMainWindow::children ();
+    for( int i =0 ; i< ch.count ();++i)
+    {
+        //        qDebug()<<"line  "<<__LINE__<<ch[i];
+    }
+    auto menu = menuBar ();
+    auto list =menu->children ();
+    // qDebug()<<" menuBar "<<menu;
+    //  qDebug()<<" list .cout "<<list.count ();
+    for( int i   = 0; i< list.count (); ++i)
+    {
+        //  qDebug()<<" in find menu Action "<<static_cast<QMenu*>(list[i])<<static_cast<QMenu*>(list[i])->objectName ();
+    }
+    for( int i = 0 ; i< list.count ();++i)
+    {
+        auto sub = dynamic_cast<QMenu*>(list[i]);
+        if(sub)
+        {
+            auto actions = sub->actions ();
+
+            for( int j = 0 ;j< actions.count (); ++j)
+            {
+                //      qDebug()<<actions[j]<<" text "<<actions[j]->text ();
+                if( static_cast<QAction*>( actions[j]) ->text ().startsWith (str))
+                {
+                    ret = static_cast<QAction*>( actions[j]) ;
+                    return ret;
+                }
+            }
+        }
+    }
+    // qDebug()<<" menu .szie : "<<menu->
+
+    qDebug()<<" i get a action "<<ret;
+    return ret;
+}
